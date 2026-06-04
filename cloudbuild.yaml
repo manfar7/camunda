@@ -1,43 +1,58 @@
 steps:
-  # Build the Docker image with BuildKit enabled
-  - name: 'gcr.io/cloud-builders/docker'
+  # Get latest stable tag from Docker Hub
+  - name: 'gcr.io/cloud-builders/curl'
+    id: get-tag
     entrypoint: bash
     args:
       - -c
       - |
-        export DOCKER_BUILDKIT=1
-        docker build \
-          -f camunda.Dockerfile \
-          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:${SHORT_SHA} \
-          -t ${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:latest \
-          .
-    timeout: 1800s
+        apt-get update -qq && apt-get install -y -qq python3 > /dev/null 2>&1
+        LATEST=$(curl -s "https://hub.docker.com/v2/repositories/camunda/camunda/tags/?page_size=50&ordering=last_updated" \
+          | python3 -c "
+        import sys, json, re
+        tags = json.load(sys.stdin)['results']
+        stable = [t['name'] for t in tags if re.match(r'^8\.\d+\.\d+$', t['name'])]
+        print(sorted(stable, key=lambda v: list(map(int, v.split('.'))), reverse=True)[0])
+        ")
+        echo "Latest stable tag: $LATEST"
+        echo "$LATEST" > /workspace/latest_tag.txt
 
-  # Push to Artifact Registry
+  # Pull pre-built image from Docker Hub, tag for Artifact Registry, and push
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda']
+    id: pull-tag-push
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        TAG=$(cat /workspace/latest_tag.txt)
+        echo "Pulling docker.io/camunda/camunda:$TAG"
+        docker pull "docker.io/camunda/camunda:$TAG"
+        docker tag "docker.io/camunda/camunda:$TAG" "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:$TAG"
+        docker tag "docker.io/camunda/camunda:$TAG" "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:latest"
+        docker push "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:$TAG"
+        docker push "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:latest"
 
   # Deploy to Cloud Run
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: deploy
+    entrypoint: bash
     args:
-      - gcloud
-      - run
-      - deploy
-      - camunda
-      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:${SHORT_SHA}
-      - --port=8080
-      - --memory=4Gi
-      - --cpu=2
-      - --no-cpu-throttling
-      - --min-instances=1
-      - --max-instances=1
-      - --region=${_REGION}
-      - --allow-unauthenticated
+      - -c
+      - |
+        TAG=$(cat /workspace/latest_tag.txt)
+        gcloud run deploy camunda \
+          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:$TAG \
+          --port=8080 \
+          --memory=4Gi \
+          --cpu=2 \
+          --no-cpu-throttling \
+          --min-instances=1 \
+          --max-instances=1 \
+          --region=${_REGION} \
+          --allow-unauthenticated \
+          --quiet
 
 substitutions:
   _REGION: us-central1
 
-images:
-  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda'
-
-timeout: 2400s
+timeout: 1200s

@@ -25,34 +25,38 @@ steps:
       - -c
       - |
         TAG=$(cat /workspace/latest_tag.txt)
+        IMAGE="$_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME"
         echo "Pulling docker.io/camunda/camunda:$TAG"
         docker pull "docker.io/camunda/camunda:$TAG"
-        docker tag "docker.io/camunda/camunda:$TAG" "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:$TAG"
-        docker tag "docker.io/camunda/camunda:$TAG" "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:latest"
-        docker push "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:$TAG"
-        docker push "${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:latest"
+        docker tag "docker.io/camunda/camunda:$TAG" "$IMAGE:$TAG"
+        docker tag "docker.io/camunda/camunda:$TAG" "$IMAGE:latest"
+        docker push "$IMAGE:$TAG"
+        docker push "$IMAGE:latest"
 
   # Deploy to Cloud Run
-  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk:slim'
     id: deploy
     entrypoint: bash
     args:
       - -c
       - |
         TAG=$(cat /workspace/latest_tag.txt)
-        gcloud run deploy camunda \
-          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/camunda/camunda:$TAG \
-          --port=8080 \
-          --memory=4Gi \
-          --cpu=2 \
-          --no-cpu-throttling \
-          --min-instances=1 \
-          --max-instances=1 \
-          --region=${_REGION} \
-          --allow-unauthenticated \
+        IMAGE="$_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME"
+        gcloud run services update $_SERVICE_NAME \
+          --platform=managed \
+          --image="$IMAGE:$TAG" \
+          --region=$_DEPLOY_REGION \
           --quiet
 
 substitutions:
-  _REGION: us-central1
+  _AR_HOSTNAME: europe-west6-docker.pkg.dev
+  _AR_PROJECT_ID: cosa-camunda-01
+  _AR_REPOSITORY: cloud-run-source-deploy
+  _DEPLOY_REGION: europe-west6
+  _SERVICE_NAME: camunda
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  substitutionOption: ALLOW_LOOSE
 
 timeout: 1200s
